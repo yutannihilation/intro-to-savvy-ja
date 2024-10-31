@@ -1,0 +1,181 @@
+---
+title: "**savvy** 入門"
+subtitle: "R パッケージで Rust を使う"
+author: "@yutannihilation"
+format: 
+  revealjs:
+    theme: ["solarized", "custom.scss"]
+    highlight-style: dracula
+    code-line-numbers: false
+---
+
+# **savvy** とは
+
+## savvy とは
+
+* R パッケージで Rust を使うためのフレームワーク
+* Rust のコードを書けば、それを R から使えるようにバインディングを自動生成してくれる
+
+## これが
+
+```rust
+/// @export
+#[savvy]
+fn to_upper(x: StringSexp) -> Result<Sexp> {
+    let mut out = OwnedStringSexp::new(x.len())?;
+
+    for (i, e) in x.iter().enumerate() {
+        if e.is_na() {
+            out.set_na(i)?;
+            continue;
+        }
+
+        let e_upper = e.to_uppercase();
+        out.set_elt(i, e_upper.as_str())?;
+    }
+
+    out.into()
+}
+```
+
+## こうなる
+
+```r
+to_upper(c("a", "b", "c"))
+#> [1] "A" "B" "C"
+```
+
+## 参考）類似のフレームワーク
+
+* **Rcpp**、**cpp11**:  
+  R パッケージで C++ を使うフレームワーク
+* **PyO3**:  
+  Python モジュールで Rust を使うフレームワーク（逆もできる）
+* **extendr**:  
+  R パッケージで Rust を使うフレームワーク（逆もできる）
+
+## 参考）extendr との関係
+
+* 私が extendr の開発に参加していたときに「extendr が巨大すぎて仕組みを理解できないので、ミニマムなものを自分で作ってみよう！」ということで始めた車輪の再発明プロジェクト
+* 最初は unextendr という名前だった
+
+## 参考）extendr との違い
+
+### savvy の利点
+
+* シンプル（欠点でもある）
+* 通常の Rust のエラーが使える
+
+### extendr の利点
+
+* 機能が豊富（欠点でもある）
+* 使ってる人が多い
+* Rust から R を使うこともできる
+
+# savvy で R パッケージをつくってみよう
+
+## 0. ヘルパパッケージをインストール
+
+```r
+install.packages(
+  "savvy",
+  repos = c(
+    "https://yutannihilation.r-universe.dev",
+    "https://cloud.r-project.org"
+  )
+)
+```
+
+## 1. 空のパッケージを作成
+
+```r
+usethis::create_package("../foo")
+```
+
+## 2. savvy 関連ファイルを設置
+
+（作成したパッケージのディレクトリに移動後）
+
+```r
+savvy::savvy_init()
+```
+
+```r
+#> Downloading savvy-cli binary
+#> trying URL 'https://github.com/yutannihilation/savvy/releases/download/v0.8.0/savvy-cli-x86_64-unknown-linux-gnu.tar.xz'
+#> Content type 'application/octet-stream' length 1412628 bytes (1.3 MB)
+#> ==================================================
+#> downloaded 1.3 MB
+#> 
+#> Writing ./src/rust/Cargo.toml
+#> Writing ./src/rust/.cargo/config.toml
+#> ...
+```
+
+## 3. ドキュメント生成
+
+Rust コードのコンパイルも実行される。
+
+```r
+devtools::document()
+```
+
+```r
+#> ℹ Updating foo documentation
+#> Writing NAMESPACE
+#> ℹ Loading foo
+#> ℹ Re-compiling foo (debug build)
+#> ── R CMD INSTALL ────────────────────────────────
+#> ...
+#> ─  DONE (foo)
+#> Writing NAMESPACE
+#> Writing to_upper.Rd
+#> Writing int_times_int.Rd
+```
+
+## パッケージの構造
+
+```
+.
+├── .Rbuildignore
+├── DESCRIPTION
+├── NAMESPACE
+├── R
+│   └── 000-wrappers.R
+├── configure
+├── configure.win
+├── cleanup
+├── cleanup.win
+├── foo.Rproj
+└── src
+    ├── Makevars.in
+    ├── Makevars.win.in
+    ├── init.c
+    ├── foo-win.def
+    └── rust
+        ├── .cargo
+        │   └── config.toml
+        ├── api.h
+        ├── Cargo.toml
+        └── src
+            └── lib.rs
+```
+
+## 主なファイル
+
+* **`src/rust/src/lib.rs`**: Rust のコード
+
+* **`src/rust/api.h`**: コンパイルされた Rust の関数を C から呼び出すためのヘッダファイル（自動生成）
+
+* **`src/init.c`**: コンパイルされた Rust の関数を R から呼び出すための C コード（自動生成）
+
+* **`R/000-wrappers.R`**: コンパイルされた Rust の関数を呼び出す R コード（自動生成）
+  
+
+# あああ
+
+```r
+foo
+bar
+baz
+```
