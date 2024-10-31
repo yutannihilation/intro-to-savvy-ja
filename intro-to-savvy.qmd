@@ -72,9 +72,70 @@ to_upper(c("a", "b", "c"))
 * 使ってる人が多い
 * Rust から R を使うこともできる
 
-# savvy で R パッケージをつくってみよう
+# なぜ R から Rust の関数が使えるのか
 
-## 0. ヘルパパッケージをインストール
+## ※免責事項
+
+がんばって説明を試みますが、素人の知識なので、いろいろ間違っていたり、雑なことを言っている可能性があります。すみません！
+
+## R's C API
+
+「C API」とは？
+
+* C/C++ にとっては、**API**
+* 他の言語にとっては、実質 **ABI**
+
+## API と ABI
+
+* **API**: ソースコードレベルで関数やデータの仕様を規定したもの。同じプラットフォーム上で、同じコンパイラでコンパイルすれば互換性がある。
+* **ABI**: バイナリレベルで関数やデータの仕様を規定したもの。互換性がある。
+
+::: aside
+参考: [APIとかABIとかシステムコールとか - 覚書](https://satoru-takeuchi.hatenablog.com/entry/2020/03/26/011858)
+:::
+
+## ABIのイメージ図
+
+![](./images/0-abi.png){fig-align="center" width="100%"}
+
+## "stable" ABI
+
+* ABI とは単に「バイナリの仕様」なので、色々なスコープの ABI がありうる。
+* ただ、「ABI」と言う時に欲しいのは、言語やバージョンに寄らない**「stableな」**ABI。
+
+→ 事実上、C の ABI が共通言語として使われる
+
+## 参考) その他の stable ABI
+
+* Swift: mac 限定だが、stable ABI を持っている
+* WebAssembly: ブラウザ向けにも OS ネイティブ向けにもまだ stable な ABI はないが、用途から考えるといずれできる？
+
+## 参考) 「C の ABI」などというものがあるのか？
+
+というのは難しくて理解できてません。。
+
+* [Does C have a standard ABI? - Stack Overflow](https://stackoverflow.com/questions/4489012/does-c-have-a-standard-abi)
+* [C Isn't A Programming Language Anymore - Faultlore](https://faultlore.com/blah/c-isnt-a-language/)
+
+## R↔Rustのイメージ図
+
+![](./images/2-r-rust.png){fig-align=center}
+
+## R↔Rust
+
+* R は、C ABI がある
+* Rust も、C ABI を持つバイナリを生成できる
+
+→ お互いに C ABI を通じて関数を呼び出し合うことができる
+
+## R↔Rust
+
+* ただ、呼び出すときに引数の数や型を揃えないといけなかったり、FFI をまたぐのでエラー処理に気を遣う必要があったりする
+* それをゼロから自分でやろうとすると大変だしバグるので、フレームワークをつくって身を任せましょう、という話になる
+
+# savvy で<br/>R パッケージを<br/>つくってみよう
+
+## 0. ヘルパーパッケージをインストール
 
 ```r
 install.packages(
@@ -110,6 +171,14 @@ savvy::savvy_init()
 #> Writing ./src/rust/Cargo.toml
 #> Writing ./src/rust/.cargo/config.toml
 #> ...
+```
+
+## （Windows の場合のみ）
+
+Git を使うなら、 `configure` と `cleanup` には実行権限をつける。
+
+```sh
+git update-index --add --chmod=+x ./configure ./configure.win ./cleanup ./cleanup.win
 ```
 
 ## 3. ドキュメント生成
@@ -171,11 +240,76 @@ devtools::document()
 
 * **`R/000-wrappers.R`**: コンパイルされた Rust の関数を呼び出す R コード（自動生成）
   
+## Rust のコード
 
-# あああ
+`///` 後のコメントは R の roxygen コメントに
+
+```rust
+/// Convert Input To Upper-Case
+///
+/// @param x A character vector.
+/// @returns A character vector with upper case version of the input.
+/// @export
+#[savvy]
+fn to_upper(x: StringSexp) -> savvy::Result<savvy::Sexp> {
+    let mut out = OwnedStringSexp::new(x.len())?;
+    ...
+```
+
+## `api.h`
+
+```c
+SEXP savvy_to_upper__ffi(SEXP c_arg__x);
+```
+
+## `init.c`
+
+エラー処理などの関数でラップ
+
+```c
+SEXP savvy_to_upper__impl(SEXP c_arg__x) {
+    SEXP res = 
+      savvy_to_upper__ffi(c_arg__x);
+    return handle_result(res);
+}
+```
+
+## `init.c`（続き）
+
+R から `.Call()` で呼び出せるように登録
+
+```c
+static const R_CallMethodDef CallEntries[] = {
+    {"savvy_to_upper__impl",
+      (DL_FUNC) &savvy_to_upper__impl, 1},
+    {NULL, NULL, 0}
+};
+
+void R_init_foo(DllInfo *dll) {
+    R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
+    R_useDynamicSymbols(dll, FALSE);
+}
+```
+
+## R のコード
 
 ```r
-foo
-bar
-baz
+#' Convert Input To Upper-Case
+#'
+#' @param x A character vector.
+#' @returns A character vector with upper case version of the input.
+#' @export
+`to_upper` <- function(`x`) {
+  .Call(savvy_to_upper__impl, `x`)
+}
+```
+
+## 使ってみる
+
+```r
+devtools::load_all()
+#> ℹ Loading foo
+
+to_upper(c("a", "b", "c"))
+#> [1] "A" "B" "C"
 ```
