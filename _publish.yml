@@ -1,0 +1,4 @@
+- source: intro-to-savvy-ja.qmd
+  quarto-pub:
+    - id: b639cb35-acbf-43cf-8e11-1ec0b945a19a
+      url: 'https://yutani.quarto.pub/intro-to-savvy-ja'
