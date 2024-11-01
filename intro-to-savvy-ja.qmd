@@ -262,13 +262,19 @@ fn to_upper(x: StringSexp) -> savvy::Result<savvy::Sexp> {
     ...
 ```
 
-## `api.h`
+## Rust のコード
+
+（`#[savvy]` マクロがどういう Rust コードを生成するかは、ここでは省略。引数の型のチェックとかエラー処理とかです）
+
+## C のヘッダファイル
+
+関数名や引数名は、かぶらないように prefix や suffix がつく
 
 ```c
 SEXP savvy_to_upper__ffi(SEXP c_arg__x);
 ```
 
-## `init.c`
+## C のコード
 
 エラー処理などの関数でラップ
 
@@ -280,7 +286,7 @@ SEXP savvy_to_upper__impl(SEXP c_arg__x) {
 }
 ```
 
-## `init.c`（続き）
+## C のコード（続き）
 
 R から `.Call()` で呼び出せるように登録
 
@@ -310,6 +316,11 @@ void R_init_foo(DllInfo *dll) {
 }
 ```
 
+## R のコード
+
+※ `savvy::savvy_init()` や `savvy::savvy_update()` は R のコードを生成するところまでで、
+この roxygen コメントからドキュメントを生成するには `devtools::document()` が必要
+
 ## 使ってみる
 
 ```r
@@ -318,4 +329,181 @@ devtools::load_all()
 
 to_upper(c("a", "b", "c"))
 #> [1] "A" "B" "C"
+
+# 型が違うとエラーに
+to_upper(1:3)
+#> Error: Argument `x` must be character, not integer
 ```
+
+## 基本的な開発の流れ
+
+1. `src/lib.rs` を編集
+2. `savvy::savvy_update()` で C と R のコードを生成
+3. `devtools::document()` で `NAMESPACE` とドキュメントを生成
+
+## 例: `hello()` を追加
+
+* return 値は `savvy::Result<T>` なので、何も返す値がなくても `()` を返す（`NULL` になる）
+* `r_println!` で R の標準出力にプリント
+
+```rust
+/// @export
+#[savvy]
+fn hello(name: &str) -> savvy::Result<()> {
+    savvy::r_println!("こんにちは、{name}！");
+    Ok(())
+}
+```
+
+## 更新
+
+```r
+savvy::savvy_update()
+#> Parsing ./src/rust/src/lib.rs
+#> Writing ./src/rust/api.h
+#> Writing ./src/init.c
+#> Writing ./R/000-wrappers.R
+```
+
+## ドキュメント生成と読み込み
+
+```r
+devtools::document()
+devtools::load_all()
+```
+
+※ `document()` は、新しい関数を追加したときや roxygen コメントを更新したとき以外は不要
+
+## 実行
+
+``` r
+hello("クソ野郎")
+#> こんにちは、クソ野郎！
+```
+
+# savvy の思想
+
+## savvy の思想
+
+1. 外部の `SEXP` と自分でつくった `SEXP` を区別する
+2. 勝手に余計な変換をしない
+
+## 1. 外部の `SEXP` と自分でつくった `SEXP` を区別する
+
+* cpp11 の `writable` と同じコンセプトで、外から来た `SEXP` は read-only で扱う
+* return 値は、新しく `SEXP` をつくって返す
+
+## 参考）R の protection
+
+R では、`SEXP` が GC の対象にならないように `PROTECT()` しないといけない。その際、以下のようなルールになっている
+
+* 関数の呼び出し側が渡してくる `SEXP`  
+  → 呼び出し側が `PROTECT()`
+
+* 関数の中でつくる `SEXP`  
+  → 自分で `PROTECT()`
+
+## *External* vs *Owned*
+
+| R の型     | external       | owned                |
+|:-----------|:---------------|:---------------------|
+| integer    | `IntegerSexp`  | `OwnedIntegerSexp`   |
+| double     | `RealSexp`     | `OwnedRealSexp`      |
+| raw        | `RawSexp`      | `OwnedRawSexp`       |
+| logical    | `LogicalSexp`  | `OwnedLogicalSexp`   |
+| character  | `StringSexp`   | `OwnedStringSexp`    |
+| list       | `ListSexp`     | `OwnedListSexp`      |
+
+## TL;DR
+
+自分でつくる方の型は `Owned` ってついてる
+
+## External
+
+![](./images/code-1.png){fig-align="center" width="100%"}
+
+## External
+
+* 関数の引数用
+
+* 値にアクセスする主な方法：
+  * `.iter()`: イテレータを返す
+  * `.as_slice()`: `slice` を返す（integer、numeric のみ）
+  * `.to_vec()`: `Vec` を返す
+
+## Owned
+
+![](./images/code-2.png){fig-align="center" width="100%"}
+
+## Owned
+
+* 主に関数の return 値用
+
+* 値を書き込む方法
+  * `.set_elt(i, v)`
+  * `IndexMut` (`x[i] = v`)（integer、numeric のみ）
+
+* `.into()` で return 値である `savvy::Result<Sexp>` に変換できる
+
+## Owned
+
+* `Vec<i32>` や `Vec<f64>` などから直接 `.try_into()` で変換することもできる
+
+```rust
+#[savvy]
+fn foo(x: IntegerSexp) -> savvy::Result<Sexp> {
+    let s = x.as_slice();
+    let out: Vec<i32> = some_fn(&s);
+    out.try_into()
+}
+```
+
+## 2. 勝手に余計な変換をしない
+
+R から見ると同じに見えても、内部のデータ型が違う場合は勝手に変換したりしない。
+具体的には、以下のようなケース。
+
+* integer と numeric
+* factor と character
+
+## 例: integer の引数に numeric は渡せない
+
+```r
+identity_int(c(1, 2))
+#> Error in identity_int(c(1, 2)) : 
+#>   Unexpected type: Cannot convert double to integer
+```
+
+## R のラッパーを書きましょう
+
+そういう変換や引数のチェックは、自分でラッパー関数を書いてその中でやりましょう。
+
+```r
+identity_int_wrapper <- function(x) {
+  x <- vctrs::vec_cast(x, integer())
+  identity_int(x)
+}
+```
+※なので、Rust の関数は直接 `@export` しない方がいい
+
+## R のラッパーを書きましょう
+
+* ユーザーフレンドリーなエラーを出すには R のコードの方ができることが多い。
+* Rust の側で R の挙動を真似ようとすると、複雑になってバグの原因になりがち。
+* めんどくさがらず R のコードを書くのが勝利への近道！
+
+# まとめ
+
+## まとめ
+
+* savvy は R から Rust を使うためのシンプルなフレームワーク
+
+* シンプルな分、自分で書かないといけない部分は多い
+
+* 仕組みを理解しつつ明示的に書くのが好きな人にはおすすめ
+
+## References
+
+* [User guide](https://yutannihilation.github.io/savvy/guide/)
+
+* [Repository](https://github.com/yutannihilation/savvy)
