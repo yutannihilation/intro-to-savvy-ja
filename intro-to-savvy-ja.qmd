@@ -6,7 +6,7 @@ format:
   revealjs:
     theme: ["solarized", "custom.scss"]
     highlight-style: dracula
-    code-line-numbers: false
+    slide-number: true
 ---
 
 # **savvy** とは
